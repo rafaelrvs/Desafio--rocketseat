@@ -1,31 +1,36 @@
-import json
 import os
 from datetime import datetime
 import yfinance as yf
-from langchain.tools import Tool
-from langchain_openai import ChatOpenAI  # Corrigido aqui
-from langchain_community.tools import DuckDuckGoSearchResults
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema import SystemMessage, HumanMessage
+import streamlit as st
+from dotenv import load_dotenv
 
-# Função para buscar preços de ações
+# Carregar variáveis de ambiente do arquivo .env
+load_dotenv()
+
+# Função para buscar preços de ações e resumir os dados
 def fetch_stock_price(ticket):
-    stock = yf.download(ticket, start="2023-08-08", end="2024-08-08")
-    return stock
-
-# Configuração da ferramenta de busca de preços
-yahoo_finance_tool = Tool(
-    name="Yahoo Finance Tool",
-    description="Fetches stock prices for {ticket} from the last year from Yahoo Finance API",
-    func=lambda ticket: fetch_stock_price(ticket)
-)
+    try:
+        stock = yf.download(ticket, start="2023-08-08", end="2024-08-08")
+        if stock.empty:
+            raise ValueError("Nenhum dado foi encontrado para o ticket fornecido.")
+        
+        # Resumindo os dados para evitar ultrapassar o limite de tokens
+        stock_summary = stock[['Close']].resample('M').mean()  # Média mensal do preço de fechamento
+        return stock_summary
+    except Exception as e:
+        st.error(f"Erro ao buscar dados de ações: {e}")
+        return None
 
 # Configuração do ambiente
-os.environ['OPENAI_API_KEY'] = ""
-llm = ChatOpenAI(model="gpt-3.5-turbo")  # Corrigido aqui
+api_key = os.getenv('OPENAI_API_KEY')
+if not api_key:
+    raise ValueError("A chave da API OpenAI não foi encontrada. Defina-a na variável de ambiente 'OPENAI_API_KEY'.")
 
-# Configuração da ferramenta de busca de notícias
-search_tool = DuckDuckGoSearchResults(backend='news', num_results=10)
+# Usando diretamente o ChatOpenAI para modelos de chat
+llm = ChatOpenAI(model="gpt-3.5-turbo", api_key=api_key)
 
 # Definindo o template do prompt
 prompt_template = """
@@ -34,18 +39,46 @@ You are an experienced stock market analyst. Analyze the historical stock price 
 Stock data: {stock_data}
 
 Output: Write a short analysis highlighting key price movements and any potential market factors that influenced these movements.
+
+RETORNE OS DADOS EM PORTUGUES
 """
 
-# Criando a cadeia de análise de preço de ações
-stock_price_analysis_chain = LLMChain(
-    llm=llm,
-    prompt=PromptTemplate.from_template(prompt_template),
-    verbose=True
-)
+# Função para executar a análise usando o ChatOpenAI diretamente
+def run_analysis(ticket):
+    stock_data = fetch_stock_price(ticket)
+    if stock_data is None:
+        return "Análise não pôde ser realizada devido a erros ao buscar dados."
+    
+    # Resumindo ainda mais os dados se necessário
+    stock_data_summary = stock_data.to_dict()
+    
+    # Preparando o prompt
+    prompt = ChatPromptTemplate.from_template(prompt_template).format(ticket=ticket, stock_data=stock_data_summary)
+    
+    # Criando mensagens de sistema e humano
+    messages = [
+        SystemMessage(content="You are an experienced stock market analyst."),
+        HumanMessage(content=prompt)
+    ]
+    
+    # Executando o modelo de chat diretamente
+    analysis = llm(messages)
+    
+    return analysis.content
 
-# Executando a análise
-ticket = "AAPL"
-stock_data = fetch_stock_price(ticket)
-analysis = stock_price_analysis_chain.run({"ticket": ticket, "stock_data": stock_data})
+# Interface do usuário com Streamlit
+with st.sidebar:
+    st.header('Insira o ticket da ação')
 
-print(analysis)
+    with st.form(key='research_form'):
+        topic = st.text_input("Selecione o ticket da ação")
+        submit_button = st.form_submit_button(label="Executar Pesquisa")
+
+if submit_button:
+    if not topic:
+        st.error("Por favor, preencha o campo do ticket.")
+    else:
+        st.info("Buscando dados e gerando análise, por favor aguarde...")
+        analysis_result = run_analysis(topic)
+        st.subheader("Resultados da sua pesquisa:")
+        st.write(analysis_result)

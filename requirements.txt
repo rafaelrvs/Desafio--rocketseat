@@ -1,6 +1,6 @@
-yfinance
-crewai
-langchain
-openai
-
-
+yfinance>=0.2.18
+crewai>=0.1.0
+langchain>=0.0.10
+openai>=0.27.0
+streamlit>=1.25.0
+python-dotenv>=1.0.0
