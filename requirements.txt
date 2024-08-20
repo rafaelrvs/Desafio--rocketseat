@@ -1,0 +1,6 @@
+yfinance
+crewai
+langchain
+openai
+
+
